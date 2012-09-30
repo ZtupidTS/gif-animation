@@ -116,7 +116,7 @@ While 1
 		Case -3
 			Exit
 		Case $hButton
-			MsgBox(64, "Some title", "Just to see is the gifs are blocked by this and vice versa.", 0, $hGui)
+			MsgBox(64, "Some title ", "Just to see is the gifs are blocked by this and vice versa.", 0, $hGui)
 		Case $hGIF2
 			If $hGIF2 Then
 				$aSize = _GIF_GetSize($hGIF2)
