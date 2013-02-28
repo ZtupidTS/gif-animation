@@ -20,10 +20,6 @@ Global Const $hGIFDLL__COMCTL32 = DllOpen("comctl32.dll")
 Global Const $hGIFDLL__OLE32 = DllOpen("ole32.dll")
 Global Const $hGIFDLL__GDIPLUS = DllOpen("gdiplus.dll")
 ;============================================================================================
-; #GLOBAL# ==================================================================================
-; GIF associative string. Don't try to edit the content, this is very important internal variable!
-Global $sGIF__ASSOCSTRING_INTERNAL = ";"
-;============================================================================================
 
 ; #CURRENT# =================================================================================
 ;_GIF_DeleteGIF
@@ -80,7 +76,7 @@ Func _GIF_DeleteGIF($iGIFId, $fDelCtrl = True)
 	; Delete control
 	If $fDelCtrl Then GUICtrlDelete($iGIFId)
 	; Remove this entry from global assoc string
-	$sGIF__ASSOCSTRING_INTERNAL = StringReplace($sGIF__ASSOCSTRING_INTERNAL, $iGIFId & "|" & $pGIF & ";", "")
+	_GIF_AssocString($iGIFId, $pGIF, True)
 	Return 1
 EndFunc   ;==>_GIF_DeleteGIF
 
@@ -169,7 +165,7 @@ EndFunc   ;==>_GIF_GetCurrentFrame
 ; Author ........: trancexx
 ;============================================================================================
 Func _GIF_GetDimension($vGIF, $vAdditionalData = "")
-	Local $aOut = [0, 0] ; preset output
+	Local $aOut[2] = [0, 0] ; preset output
 	Local $vData
 	; Process passed
 	If IsBinary($vGIF) Then ; GIF binary data passed
@@ -190,21 +186,20 @@ Func _GIF_GetDimension($vGIF, $vAdditionalData = "")
 		EndIf
 	EndIf
 	Local $hGDIP ; Gdip engine
-	Local $hMemGlobal ; Memory
 	; Bitmap object
 	Local $pBitmap, $iWidth, $iHeight
 	If IsString($vData) Then
 		$pBitmap = _GIF_CreateBitmapFromFile($hGDIP, $vData, $iWidth, $iHeight)
-		If @error Then $pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $hMemGlobal, Binary($vData), $iWidth, $iHeight)
+		If @error Then $pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, Binary($vData), $iWidth, $iHeight)
 		If @error Then
 			$vData = FileRead($vData)
-			$pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $hMemGlobal, $vData, $iWidth, $iHeight)
+			$pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $vData, $iWidth, $iHeight)
 		EndIf
 	Else
-		$pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $hMemGlobal, $vData, $iWidth, $iHeight)
+		$pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $vData, $iWidth, $iHeight)
 	EndIf
 	If @error Then Return SetError(1, 0, $aOut) ; Nothing worked. Invalid input or Gdip failure.
-	_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+	_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 	$aOut[0] = $iWidth
 	$aOut[1] = $iHeight
 	Return $aOut
@@ -224,7 +219,7 @@ EndFunc   ;==>_GIF_GetDimension
 ;============================================================================================
 Func _GIF_GetSize($iGIFId)
 	Local $pGIF = _GIF_GetGIFAssoc($iGIFId)
-	Local $aOut = [0, 0] ; preset output
+	Local $aOut[2] = [0, 0] ; preset output
 	; Read $pGIF (shorter version)
 	Local $tGIF = DllStructCreate("handle GIFThread;" & _
 			"ptr CodeBuffer;" & _
@@ -441,8 +436,8 @@ Func _GUICtrlCreateGIF($vGIF, $vAdditionalData, $iLeft, $iTop, $iWidth = Default
 	DllStructSetData($tGIF, "ControlHandle", GUICtrlGetHandle($hGIFControl))
 	; If there is just one frame there is no animation. Return control id
 	If $iFrameCount = 1 Then
-		; Expand global assoc string
-		$sGIF__ASSOCSTRING_INTERNAL &= $hGIFControl & "|" & $pGIF & ";"
+		; Extend global assoc string
+		_GIF_AssocString($hGIFControl, $pGIF, False)
 		Return SetExtended(1, $hGIFControl)
 	EndIf
 	; Allocate enough memory space for machine code
@@ -614,7 +609,7 @@ Func _GUICtrlCreateGIF($vGIF, $vAdditionalData, $iLeft, $iTop, $iWidth = Default
 				"33C0" & _                                                               ; xor eax, eax ;<- eax = 0
 				"C3" _                                                                   ; ret ;<- Return.
 				)
-			EndIf
+	EndIf
 	; Create thread in which to run the code
 	Local $hThread = _GIF_CreateThread($pCodeBuffer)
 	If @error Then Return SetError(5, 0, $hGIFControl) ; Couldn't create thread
@@ -622,8 +617,8 @@ Func _GUICtrlCreateGIF($vGIF, $vAdditionalData, $iLeft, $iTop, $iWidth = Default
 	DllStructSetData($tGIF, "GIFThread", $hThread)
 	; Redraw parent window
 	_GIF_InvalidateRect(_GIF_GetParent($hControl))
-	; Expand global assoc string
-	$sGIF__ASSOCSTRING_INTERNAL &= $hGIFControl & "|" & $pGIF & ";"
+	; Extend global assoc string
+	_GIF_AssocString($hGIFControl, $pGIF, False)
 	; All went well. Return Control Identifier
 	Return $hGIFControl
 EndFunc   ;==>_GUICtrlCreateGIF
@@ -782,17 +777,16 @@ EndFunc   ;==>_GIF_GetParent
 Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFControl, $iLeft = 0, $iTop = 0, $iARGB = Default)
 	If $iARGB = Default Then $iARGB = 0xFF000000
 	Local $hGDIP ; Gdip engine
-	Local $hMemGlobal ; Memory
 	; Bitmap object
 	Local $pBitmap, $iWidthReal, $iHeightReal
 	If IsBinary($bBinary) Then
-		$pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $hMemGlobal, $bBinary, $iWidthReal, $iHeightReal)
+		$pBitmap = _GIF_CreateBitmapFromBinaryImage($hGDIP, $bBinary, $iWidthReal, $iHeightReal)
 	Else
 		$pBitmap = _GIF_CreateBitmapFromFile($hGDIP, $bBinary, $iWidthReal, $iHeightReal)
 	EndIf
 	If @error Then
 		Local $iErr = @error
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 		Return SetError(1, $iErr, 0)
 	EndIf
 	Local $fDoResize
@@ -809,7 +803,7 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	; Get number of frame dimensions
 	Local $iFrameDimensionsCount = _GIF_GdipImageGetFrameDimensionsCount($pBitmap)
 	If @error Then
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 		Return SetError(2, 0, 0)
 	EndIf
 	; GUID
@@ -818,19 +812,19 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	; Get the identifiers for the frame dimensions
 	_GIF_GdipImageGetFrameDimensionsList($pBitmap, $pGUID, $iFrameDimensionsCount)
 	If @error Then
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 		Return SetError(3, 0, 0)
 	EndIf
 	; Number of frames
 	Local $iFrameCount = _GIF_GdipImageGetFrameCount($pBitmap, $pGUID)
 	If @error Then
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 		Return SetError(4, 0, 0)
 	EndIf
 	; Allocate needed global memory
 	Local $pGIF = _GIF_MemGlobalAlloc(4 * (8 + 4 * @AutoItX64 + $iFrameCount), 64) ; GPTR
 	If @error Then
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 		Return SetError(3, 0, 0)
 	EndIf
 	Local $tGIF = DllStructCreate("handle GIFThread;" & _
@@ -859,7 +853,7 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	If $iFrameCount = 1 Then
 		Local $hGIFBitmap = _GIF_GdipCreateHBITMAPFromBitmap($pBitmap, $iARGB)
 		If $fDoResize Then _GIF_ResizeBitmap($hGIFBitmap, $iWidth, $iHeight)
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 		; Render default image
 		_GIF_DeleteObject(GUICtrlSendMsg($hGIFControl, 370, 0, $hGIFBitmap)) ; STM_SETIMAGE
 		_GIF_DeleteObject($hGIFBitmap)
@@ -869,7 +863,7 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	Local $hImageList = _GIF_ImageList_Create($iWidth, $iHeight, 32, $iFrameCount) ; ILC_COLOR32
 	If @error Then
 		If $fNewControl Then GUICtrlDelete($hGIFControl)
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal, $pGIF)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $pGIF)
 		Return SetError(4, 0, 0)
 	EndIf
 	; Set imagelist
@@ -896,7 +890,7 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	Local $iPropertyItemSize = _GIF_GdipGetPropertyItemSize($pBitmap, 0x5100) ; PropertyTagFrameDelay
 	If @error Then
 		If $fNewControl Then GUICtrlDelete($hGIFControl)
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal, $pGIF)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $pGIF)
 		Return SetError(5, 0, 0)
 	EndIf
 	; Raw structure for the call
@@ -905,7 +899,7 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	_GIF_GdipGetPropertyItem($pBitmap, 0x5100, $iPropertyItemSize, DllStructGetPtr($tRawPropItem)) ; PropertyTagFrameDelay
 	If @error Then
 		If $fNewControl Then GUICtrlDelete($hGIFControl)
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal, $pGIF)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $pGIF)
 		Return SetError(6, 0, 0)
 	EndIf
 	; Formatted structure in place of the raw
@@ -937,7 +931,7 @@ Func _GIF_Create_pGIF($bBinary, ByRef $iWidth, ByRef $iHeight, ByRef $hGIFContro
 	; Set transparency
 	DllStructSetData($tGIF, "Transparent", $fTransparent)
 	; Free
-	_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
+	_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
 	; Return sucess (pointer to allocated memory)
 	Return $pGIF
 EndFunc   ;==>_GIF_Create_pGIF
@@ -1030,53 +1024,41 @@ Func _GIF_CreateBitmapFromFile(ByRef $hGDIP, $sFile, ByRef $iWidth, ByRef $iHeig
 	Return $pBitmap
 EndFunc   ;==>_GIF_CreateBitmapFromFile
 
-Func _GIF_CreateBitmapFromBinaryImage(ByRef $hGDIP, ByRef $hMemGlobal, $bBinary, ByRef $iWidth, ByRef $iHeight)
-	$bBinary = Binary($bBinary)
+Func _GIF_CreateBitmapFromBinaryImage(ByRef $hGDIP, $bBinary, ByRef $iWidth, ByRef $iHeight)
 	; Determine the size of binary data
 	Local $iSize = BinaryLen($bBinary)
-	; Allocate global moveable memory in requred size
-	$hMemGlobal = _GIF_MemGlobalAlloc($iSize, 2); GMEM_MOVEABLE
+	; IStream definition
+	Local Const $sIID_IStream = "{0000000C-0000-0000-C000-000000000046}"
+	; Define IStream methods:
+	Local Const $tagIStream_Small = "Read hresult(struct*;dword;dword*);" & _
+			"Write hresult(struct*;dword;dword*);" & _ ; ISequentialStream
+			"Seek hresult(int64;dword;uint64*);" ; the rest of IStream methods are omited for brevity (they aren't used here)
+	; Create stream object
+	Local $oStream = ObjCreateInterface(_GIF_CreateStreamOnHGlobal(0), $sIID_IStream, $tagIStream_Small)
 	If @error Then Return SetError(1, 0, 0)
-	; Get pointer to it
-	Local $pMemory = _GIF_MemGlobalLock($hMemGlobal)
-	If @error Then
-		_GIF_MemGlobalFree($hMemGlobal)
-		Return SetError(2, 0, 0)
-	EndIf
-	; Make structure at that address
-	Local $tBinary = DllStructCreate("byte[" & $iSize & "]", $pMemory)
+    ; Make structure in size of binary data
+	Local $tBinary = DllStructCreate("byte[" & $iSize & "]")
 	; Fill it
 	DllStructSetData($tBinary, 1, $bBinary)
-	; Create stream
-	Local $pStream = _GIF_CreateStreamOnHGlobal($pMemory, 0)
-	If @error Then
-		_GIF_MemGlobalFree($hMemGlobal)
-		Return SetError(3, 0, 0)
-	EndIf
-	; Unlock memory (almost irrelevant)
-	_GIF_MemGlobalUnlock($pMemory)
+	; Write to the stream
+	Local $iWritten
+	$oStream.Write($tBinary, $iSize, $iWritten)
 	; Initialize Gdip
 	$hGDIP = _GIF_GdiplusStartup()
-	If @error Then
-		_GIF_MemGlobalFree($hMemGlobal)
-		Return SetError(4, 0, 0)
-	EndIf
+	If @error Then Return SetError(2, 0, 0)
 	; Create bitmap object out of the stream
-	Local $pBitmap = _GIF_GdipCreateBitmapFromStream($pStream)
+	Local $pBitmap = _GIF_GdipCreateBitmapFromStream($oStream())
 	If @error Then
 		_GIF_GdiplusShutdown($hGDIP)
-		_GIF_MemGlobalFree($hMemGlobal)
-		Return SetError(5, 0, 0)
+		Return SetError(3, 0, 0)
 	EndIf
 	; Get dimension
 	_GIF_GdipGetImageDimension($pBitmap, $iWidth, $iHeight)
 	If @error Then
-		_GIF_FreeGdipAndMem($pBitmap, $hGDIP, $hMemGlobal)
-		Return SetError(6, 0, 0)
+		_GIF_FreeGdipAndMem($pBitmap, $hGDIP)
+		Return SetError(4, 0, 0)
 	EndIf
-    ; Call Release on stream object
-    DllCallAddress("dword", DllStructGetData(DllStructCreate("ptr QueryInterface; ptr AddRef; ptr Release;", DllStructGetData(DllStructCreate("ptr pObj;", $pStream), "pObj")), "Release"), "ptr", $pStream)
-    ; Return success
+	; Return success
 	Return $pBitmap
 EndFunc   ;==>_GIF_CreateBitmapFromBinaryImage
 
@@ -1243,10 +1225,9 @@ Func _GIF_GdipImageRotateFlip($hImage, $iType)
 	Return 1
 EndFunc   ;==>_GIF_GdipImageRotateFlip
 
-Func _GIF_FreeGdipAndMem($pBitmap = 0, $hGDIP = 0, $hMem = 0, $pGIF = 0)
+Func _GIF_FreeGdipAndMem($pBitmap = 0, $hGDIP = 0, $pGIF = 0)
 	If $pBitmap Then _GIF_GdipDisposeImage($pBitmap)
 	If $hGDIP Then _GIF_GdiplusShutdown($hGDIP)
-	If $hMem Then _GIF_MemGlobalFree($hMem)
 	If $pGIF Then _GIF_MemGlobalFree($pGIF)
 EndFunc   ;==>_GIF_FreeGdipAndMem
 
@@ -1443,8 +1424,22 @@ Func _GIF_SwapEndian($iValue, $iSize = 0)
 EndFunc   ;==>_GIF_SwapEndian
 
 Func _GIF_GetGIFAssoc($iGIFId)
-	Local $aArray = StringRegExp($sGIF__ASSOCSTRING_INTERNAL, "(?i);" & $iGIFId & "\|(.*?);", 3)
+	Local $aArray = StringRegExp(_GIF_AssocString(), "(?i);" & $iGIFId & "\|(.*?);", 3)
 	If @error Then Return 0
 	Return Ptr($aArray[0])
 EndFunc   ;==>_GIF_GetGIFAssoc
+
+Func _GIF_AssocString($iGIFId = 0, $pGIF = 0, $fRemove = True)
+	Local Static $sGIF__ASSOCSTRING_INTERNAL = ";"
+	If $iGIFId And $pGIF Then
+		If $fRemove Then
+			; Remove this entry from assoc string
+			$sGIF__ASSOCSTRING_INTERNAL = StringReplace($sGIF__ASSOCSTRING_INTERNAL, $iGIFId & "|" & $pGIF & ";", "")
+		Else
+			; Add to assoc string
+			$sGIF__ASSOCSTRING_INTERNAL &= $iGIFId & "|" & $pGIF & ";"
+		EndIf
+	EndIf
+	Return $sGIF__ASSOCSTRING_INTERNAL
+EndFunc   ;==>_GIF_AssocString
 ;============================================================================================
